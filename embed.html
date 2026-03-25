@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FSE Brochure — Embedded Viewer</title>
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { height: 100%; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #e8e8e8; }
+
+        .embed-viewer { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+
+        .embed-toolbar {
+            display: flex; align-items: center; justify-content: space-between;
+            height: 40px; padding: 0 12px; background: #1a1a2e; color: #e0e0e0;
+            font-size: 13px; flex-shrink: 0;
+        }
+        .embed-toolbar button {
+            background: transparent; border: none; color: #e0e0e0; cursor: pointer;
+            width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+            border-radius: 6px; transition: background 0.2s;
+        }
+        .embed-toolbar button:hover { background: rgba(255,255,255,0.1); }
+        .embed-toolbar button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        .embed-nav { display: flex; align-items: center; gap: 4px; }
+        .embed-page { font-size: 12px; opacity: 0.7; min-width: 60px; text-align: center; }
+        .embed-actions { display: flex; align-items: center; gap: 4px; }
+
+        .embed-canvas-wrap {
+            flex: 1; display: flex; align-items: center; justify-content: center;
+            overflow: hidden; position: relative;
+        }
+
+        .embed-canvas-wrap canvas {
+            max-width: 100%; max-height: 100%; object-fit: contain;
+            box-shadow: 0 2px 20px rgba(0,0,0,0.25);
+        }
+
+        .embed-loading {
+            position: absolute; inset: 0; display: flex; align-items: center;
+            justify-content: center; background: #e8e8e8; color: #666;
+        }
+        .embed-loading.hidden { display: none; }
+
+        .embed-branding {
+            text-align: center; padding: 4px; font-size: 11px; color: #999;
+            background: #1a1a2e;
+        }
+        .embed-branding a { color: #e94560; text-decoration: none; }
+        .embed-branding a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="embed-viewer">
+        <div class="embed-toolbar">
+            <div class="embed-nav">
+                <button id="e-prev" title="Previous">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <span class="embed-page" id="e-page">1 / 1</span>
+                <button id="e-next" title="Next">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+            </div>
+            <div class="embed-actions">
+                <button id="e-download" title="Download PDF">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                    </svg>
+                </button>
+                <button id="e-fullscreen" title="Fullscreen">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+                    </svg>
+                </button>
+                <button id="e-open" title="Open in new window">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="embed-canvas-wrap" id="e-canvasWrap">
+            <div class="embed-loading" id="e-loading">Loading...</div>
+        </div>
+
+        <div class="embed-branding">
+            <a href="index.html" target="_blank">View full publication ↗</a>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
+            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script>
+    (function() {
+        'use strict';
+
+        pdfjsLib.GlobalWorkerOptions.workerSrc =
+            'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        const params = new URLSearchParams(window.location.search);
+        const pdfUrl = params.get('pdf') || 'FSE brochure.pdf';
+        const startPage = parseInt(params.get('page'), 10) || 1;
+
+        let pdfDoc = null;
+        let currentPage = startPage;
+        let totalPages = 0;
+        let rendering = false;
+
+        const wrap = document.getElementById('e-canvasWrap');
+        const loading = document.getElementById('e-loading');
+        const pageLabel = document.getElementById('e-page');
+        const btnPrev = document.getElementById('e-prev');
+        const btnNext = document.getElementById('e-next');
+
+        async function renderPage(num) {
+            if (rendering) return;
+            rendering = true;
+
+            const page = await pdfDoc.getPage(num);
+            const wrapRect = wrap.getBoundingClientRect();
+            const baseViewport = page.getViewport({ scale: 1 });
+            const scale = Math.min(
+                (wrapRect.width - 20) / baseViewport.width,
+                (wrapRect.height - 20) / baseViewport.height
+            ) * (window.devicePixelRatio || 1);
+
+            const viewport = page.getViewport({ scale });
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            canvas.style.width = (viewport.width / (window.devicePixelRatio || 1)) + 'px';
+            canvas.style.height = (viewport.height / (window.devicePixelRatio || 1)) + 'px';
+
+            await page.render({ canvasContext: ctx, viewport }).promise;
+
+            // Remove old canvas
+            const old = wrap.querySelector('canvas');
+            if (old) old.remove();
+            wrap.appendChild(canvas);
+            loading.classList.add('hidden');
+
+            pageLabel.textContent = `${num} / ${totalPages}`;
+            btnPrev.disabled = num <= 1;
+            btnNext.disabled = num >= totalPages;
+            currentPage = num;
+            rendering = false;
+        }
+
+        async function init() {
+            pdfDoc = await pdfjsLib.getDocument(pdfUrl).promise;
+            totalPages = pdfDoc.numPages;
+            currentPage = Math.min(startPage, totalPages);
+            await renderPage(currentPage);
+        }
+
+        btnPrev.addEventListener('click', () => { if (currentPage > 1) renderPage(currentPage - 1); });
+        btnNext.addEventListener('click', () => { if (currentPage < totalPages) renderPage(currentPage + 1); });
+
+        document.getElementById('e-download').addEventListener('click', () => {
+            const a = document.createElement('a');
+            a.href = pdfUrl;
+            a.download = 'FSE-Brochure.pdf';
+            a.click();
+        });
+
+        document.getElementById('e-fullscreen').addEventListener('click', () => {
+            if (document.fullscreenElement) document.exitFullscreen();
+            else document.documentElement.requestFullscreen();
+        });
+
+        document.getElementById('e-open').addEventListener('click', () => {
+            window.open('index.html', '_blank', 'noopener,noreferrer');
+        });
+
+        // Keyboard
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowLeft') renderPage(Math.max(1, currentPage - 1));
+            if (e.key === 'ArrowRight') renderPage(Math.min(totalPages, currentPage + 1));
+        });
+
+        // Touch swipe
+        let startX = 0;
+        wrap.addEventListener('touchstart', (e) => { startX = e.touches[0].clientX; }, { passive: true });
+        wrap.addEventListener('touchend', (e) => {
+            const dx = e.changedTouches[0].clientX - startX;
+            if (Math.abs(dx) > 50) {
+                if (dx < 0 && currentPage < totalPages) renderPage(currentPage + 1);
+                if (dx > 0 && currentPage > 1) renderPage(currentPage - 1);
+            }
+        }, { passive: true });
+
+        // Resize
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => renderPage(currentPage), 250);
+        });
+
+        init().catch(err => {
+            loading.textContent = 'Failed to load: ' + err.message;
+        });
+    })();
+    </script>
+</body>
+</html>
